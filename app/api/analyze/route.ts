@@ -6,7 +6,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
 // Generate documentation using Gemini
 async function generateDocumentation(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
   
   const filesContext = files.map(f => `
 File: ${f.path}
@@ -41,7 +41,7 @@ Format the response in clean Markdown with proper headings, code blocks, and lis
 
 // Generate UML diagram using Gemini
 async function generateUML(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
   
   const filesContext = files.map(f => `
 File: ${f.path}
@@ -73,7 +73,7 @@ Provide clear explanations for each diagram.`;
 
 // Generate quiz using Gemini
 async function generateQuiz(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
   
   const filesContext = files.map(f => `
 File: ${f.path}

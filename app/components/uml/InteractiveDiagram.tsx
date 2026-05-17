@@ -307,6 +307,11 @@ export default function InteractiveDiagram({
     const classIdMatch = elId.match(/^classId-(.+)-\d+$/);
     if (classIdMatch) return classIdMatch[1];
 
+    // Flowchart nodes: Mermaid sets id="flowchart-NodeId-N" on the <g> element.
+    // Extract the NodeId so it matches the architecture node IDs from Gemini.
+    const flowchartMatch = elId.match(/^flowchart-(.+?)-\d+$/);
+    if (flowchartMatch) return flowchartMatch[1];
+
     const dataId = el.getAttribute("data-id");
     if (dataId?.trim()) return dataId.trim();
 
@@ -337,8 +342,8 @@ export default function InteractiveDiagram({
       if (!name) return;
       nodeMapRef.current.set(g, name);
       g.style.cursor = "pointer";
-      g.addEventListener("mouseenter", () => onNodeHoverRef.current(name));
-      g.addEventListener("mouseleave", () => onNodeHoverRef.current(null));
+      // Don't fire hover on mouseenter — it triggered opacity dimming which
+      // looked like a jarring "zoom" effect. Only clicks sync with the panel.
       g.addEventListener("click", () => {
         if (!isDragged.current) onNodeClickRef.current(name);
       });
@@ -354,12 +359,20 @@ export default function InteractiveDiagram({
     if (renderState !== "done") return;
     nodeMapRef.current.forEach((name, g) => {
       const isActive = activeNode !== null && name === activeNode;
-      g.style.opacity = activeNode === null || isActive ? "1" : "0.25";
-      g.style.transition = "opacity 0.15s";
-      g.querySelectorAll<SVGRectElement>("rect").forEach((rect) => {
-        rect.style.stroke = isActive ? "rgba(255,255,255,0.85)" : "";
-        rect.style.strokeWidth = isActive ? "2" : "";
-        rect.style.transition = "stroke 0.15s, stroke-width 0.15s";
+      // No opacity dimming — it creates a distracting "zoom" feel on hover.
+      // Only the active (clicked) node gets a bright outline.
+      g.style.opacity = "1";
+      g.querySelectorAll<SVGRectElement>("rect, polygon, circle, ellipse").forEach((shape) => {
+        if (isActive) {
+          shape.style.stroke = "#ffffff";
+          shape.style.strokeWidth = "2.5";
+          shape.style.filter = "drop-shadow(0 0 6px rgba(255,255,255,0.35))";
+          shape.style.transition = "stroke 0.12s, stroke-width 0.12s, filter 0.12s";
+        } else {
+          shape.style.stroke = "";
+          shape.style.strokeWidth = "";
+          shape.style.filter = "";
+        }
       });
     });
   }, [activeNode, renderState]);

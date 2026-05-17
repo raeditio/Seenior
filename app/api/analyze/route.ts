@@ -1,18 +1,44 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { WatsonXAI } from '@ibm-cloud/watsonx-ai';
+import { IamAuthenticator } from 'ibm-cloud-sdk-core';
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllCodeFiles, getRepositoryInfo, parseGitHubUrl, type CodeFile } from '../github/lib';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+// Initialize WatsonX AI client with explicit authentication
+const watsonxAI = WatsonXAI.newInstance({
+  version: '2024-05-31',
+  serviceUrl: 'https://us-south.ml.cloud.ibm.com',
+  authenticator: new IamAuthenticator({
+    apikey: process.env.WATSONAI_API_KEY || '',
+  }),
+});
 
 const GENERATION_CONFIG = {
   temperature: 0,      // fully deterministic output
   topP: 1,
   topK: 1,
+  max_new_tokens: 4000,
 };
 
-// Generate documentation using Gemini
+// Generate text using WatsonX AI (kept for backward compatibility)
+async function generateText(prompt: string, responseFormat?: 'json'): Promise<string> {
+  const params = {
+    input: prompt,
+    modelId: 'meta-llama/llama-3-3-70b-instruct',
+    projectId: process.env.WATSONX_PROJECT_ID || '',
+    parameters: GENERATION_PARAMS,
+  };
+
+  const response = await watsonxAI.generateText(params);
+  
+  if (response.result && response.result.results && response.result.results.length > 0) {
+    return response.result.results[0].generated_text || '';
+  }
+  
+  throw new Error('No response generated from WatsonX AI');
+}
+
+// Generate documentation using watsonx.ai
 async function generateDocumentation(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash', generationConfig: GENERATION_CONFIG });
   
   const filesContext = files.map(f => `
 File: ${f.path}
@@ -39,17 +65,11 @@ Please provide:
 
 Format the response in clean Markdown with proper headings, code blocks, and lists.`;
 
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  return response.text();
+  return await generateText(prompt);
 }
 
 // Generate UML diagram using Gemini
 async function generateUML(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: { ...GENERATION_CONFIG, responseMimeType: 'application/json' },
-  });
 
   const filesContext = files.map(f => `
 File: ${f.path}
@@ -110,8 +130,7 @@ Rules for "categories":
 Repository Files:
 ${filesContext}`;
 
-  const result = await model.generateContent(prompt);
-  const text = result.response.text();
+  const text = await generateText(prompt);
   try {
     return JSON.parse(text);
   } catch {
@@ -122,7 +141,6 @@ ${filesContext}`;
 
 // Generate quiz using Gemini
 async function generateQuiz(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash', generationConfig: GENERATION_CONFIG });
   
   const filesContext = files.map(f => `
 File: ${f.path}
@@ -155,9 +173,7 @@ Format as JSON array with this structure:
 
 Return ONLY the JSON array, no additional text.`;
 
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  const text = response.text();
+  const text = await generateText(prompt);
   
   // Extract JSON from response
   const jsonMatch = text.match(/\[[\s\S]*\]/);

@@ -253,7 +253,7 @@ function processMarkdown(markdown: string): { html: string; mermaidBlocks: Array
               `${copyIcon}<span>Copy</span>` +
             `</button>` +
           `</div>` +
-          `<div class="overflow-x-auto p-4"><code class="text-zinc-300 leading-relaxed" data-lang="${language}">${escaped}</code></div>` +
+          `<pre class="overflow-x-auto p-4 m-0 whitespace-pre"><code class="text-zinc-300 leading-relaxed" data-lang="${language}">${escaped}</code></pre>` +
         `</div>`
       );
     }

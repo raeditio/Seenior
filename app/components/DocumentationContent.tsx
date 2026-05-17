@@ -73,78 +73,79 @@ export default function DocumentationContent({ html, mermaidBlocks }: Documentat
   useEffect(() => {
     if (!contentRef.current) return;
 
-    // Apply syntax highlighting and add enhanced copy buttons to all code blocks
-    const codeBlocks = contentRef.current.querySelectorAll('pre code[data-code]');
-    
+    // Apply syntax highlighting and add copy buttons to all code blocks.
+    // Code is read from textContent (not a data attribute) so special chars don't break parsing.
+    const codeBlocks = contentRef.current.querySelectorAll('pre[data-lang] code');
+
     codeBlocks.forEach(async (codeEl) => {
-      const code = codeEl.getAttribute('data-code') || '';
-      const lang = codeEl.getAttribute('data-lang') || 'text';
       const pre = codeEl.parentElement;
       if (!pre) return;
-
-      // Check if already processed
+      // Skip already-processed blocks
       if (pre.querySelector('button')) return;
+
+      const code = codeEl.textContent || '';
+      const lang = pre.getAttribute('data-lang') || 'text';
+
+      // --- Header bar: language badge + copy button ---
+      const header = document.createElement('div');
+      header.className = 'flex items-center justify-between px-4 py-2 border-b border-zinc-800 bg-zinc-900/70';
+
+      const badge = document.createElement('span');
+      badge.className = 'text-[10px] font-mono text-zinc-500 uppercase tracking-wider';
+      badge.textContent = lang === 'text' ? 'code' : lang;
+      header.appendChild(badge);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'flex items-center gap-1.5 px-2 py-1 text-[11px] text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded transition-colors';
+      const copyIcon = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+      const checkIcon = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+      copyBtn.innerHTML = `${copyIcon}<span>Copy</span>`;
+
+      copyBtn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(code);
+          copyBtn.innerHTML = `${checkIcon}<span>Copied!</span>`;
+          copyBtn.style.color = 'rgb(134 239 172)'; // green-300
+          setTimeout(() => {
+            copyBtn.innerHTML = `${copyIcon}<span>Copy</span>`;
+            copyBtn.style.color = '';
+          }, 2000);
+        } catch {
+          // Fallback for browsers that block clipboard API
+          const ta = document.createElement('textarea');
+          ta.value = code;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          copyBtn.innerHTML = `${checkIcon}<span>Copied!</span>`;
+          setTimeout(() => { copyBtn.innerHTML = `${copyIcon}<span>Copy</span>`; }, 2000);
+        }
+      };
+      header.appendChild(copyBtn);
+
+      // Rewrap: move <code> into a scrollable body div, prepend header
+      pre.style.padding = '0';
+      pre.style.overflow = 'hidden';
+
+      const body = document.createElement('div');
+      body.className = 'overflow-x-auto p-4';
+      pre.insertBefore(body, codeEl);
+      body.appendChild(codeEl);
+      pre.insertBefore(header, body);
 
       // Apply syntax highlighting
       try {
-        const highlighted = await codeToHtml(code, {
-          lang: lang,
-          theme: 'github-dark',
-        });
-        
-        // Extract just the code content from the generated HTML
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = highlighted;
-        const highlightedCode = tempDiv.querySelector('code');
-        if (highlightedCode) {
-          codeEl.innerHTML = highlightedCode.innerHTML;
-        }
-      } catch (err) {
-        // If highlighting fails, keep original code
-        console.warn('Syntax highlighting failed:', err);
+        const highlighted = await codeToHtml(code, { lang, theme: 'github-dark' });
+        const tmp = document.createElement('div');
+        tmp.innerHTML = highlighted;
+        const hlCode = tmp.querySelector('code');
+        if (hlCode) codeEl.innerHTML = hlCode.innerHTML;
+      } catch {
+        // Keep plain text if highlighting fails
       }
-
-      // Add language badge
-      const langBadge = document.createElement('div');
-      langBadge.className = 'absolute top-2 left-2 px-2 py-0.5 text-[10px] font-mono bg-zinc-800/80 text-zinc-400 rounded uppercase tracking-wider';
-      langBadge.textContent = lang;
-      pre.appendChild(langBadge);
-
-      // Add line numbers
-      const lines = code.split('\n');
-      const lineNumbersDiv = document.createElement('div');
-      lineNumbersDiv.className = 'absolute left-0 top-0 bottom-0 w-10 bg-zinc-900/50 border-r border-zinc-800 flex flex-col items-end pr-2 pt-4 text-[10px] text-zinc-600 font-mono select-none';
-      lines.forEach((_, i) => {
-        const lineNum = document.createElement('div');
-        lineNum.textContent = String(i + 1);
-        lineNum.className = 'leading-[1.5rem] h-[1.5rem]';
-        lineNumbersDiv.appendChild(lineNum);
-      });
-      pre.appendChild(lineNumbersDiv);
-      
-      // Adjust code padding for line numbers
-      if (codeEl instanceof HTMLElement) {
-        codeEl.style.paddingLeft = '3rem';
-      }
-
-      // Add copy button
-      const button = document.createElement('button');
-      button.className = 'absolute top-2 right-2 px-2 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1';
-      button.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><span>Copy</span>';
-      button.onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(code);
-          button.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Copied</span>';
-          setTimeout(() => {
-            button.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg><span>Copy</span>';
-          }, 2000);
-        } catch (err) {
-          console.error('Failed to copy:', err);
-        }
-      };
-      
-      pre.style.position = 'relative';
-      pre.appendChild(button);
     });
 
     // Replace Mermaid placeholders with actual diagram containers

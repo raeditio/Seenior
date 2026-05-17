@@ -234,11 +234,14 @@ function processMarkdown(markdown: string): { html: string; mermaidBlocks: Array
   );
   
   // Process other code blocks
+  // Note: data-code is intentionally NOT used — raw code in an attribute breaks on quotes/angle-brackets.
+  // DocumentationContent reads code via codeEl.textContent instead.
   processed = processed.replace(
     /```(\w+)?\n([\s\S]*?)```/g,
     (_, lang, code) => {
       const language = lang || 'text';
-      return `<pre class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 overflow-x-auto text-xs font-mono text-zinc-300 my-4 relative group"><code data-code="${code}" data-lang="${language}">${code}</code></pre>`;
+      const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return `<pre class="bg-zinc-900 border border-zinc-800 rounded-xl text-xs font-mono text-zinc-300 my-4 overflow-hidden" data-lang="${language}"><code>${escaped}</code></pre>`;
     }
   );
   
@@ -557,7 +560,7 @@ function ResultsPageContent() {
                 {/* TOC Sidebar */}
                 {headings.length > 0 && (
                   <aside className="hidden lg:block w-64 shrink-0">
-                    <nav className="sticky top-6">
+                    <nav className="sticky top-20">
                       <p className="text-xs font-semibold text-zinc-600 mb-3 uppercase tracking-wider">Contents</p>
                       <ul className="space-y-2">
                         {headings.map(h => (

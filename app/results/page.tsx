@@ -2,18 +2,27 @@
 
 import DocumentationContent from '@/app/components/DocumentationContent';
 import DescriptionPanel from '@/app/components/uml/DescriptionPanel';
+import CodebaseMapView from '@/app/components/uml/CodebaseMapView';
+import FeatureFlowsView from '@/app/components/uml/FeatureFlowsView';
 import InteractiveDiagram from '@/app/components/uml/InteractiveDiagram';
-import { type Category } from '@/app/components/uml/categoryColors';
 import { AnimatePresence, motion } from 'framer-motion';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
+interface ArchNode  { id: string; displayName: string; category: string; description: string; }
+interface FlowFile  { path: string; role: string; }
+interface Feature   { name: string; description: string; flow: FlowFile[]; sequenceDiagram?: string; }
+interface ClassEntry { name: string; category: string; description: string; }
+
+interface MapNode { id: string; label: string; category: string; description: string; }
+interface MapEdge { source: string; target: string; label?: string; }
+
 interface UmlData {
-  classDiagram: string;
-  sequenceDiagram: string;
-  descriptions: Record<string, string>;
-  categories: Record<string, Category>;
+  architecture: { mermaid: string; nodes: ArchNode[] };
+  features: Feature[];
+  classDiagram: { hasClassHierarchy: boolean; mermaid: string | null; classes: ClassEntry[] } | null;
+  codebaseMap?: { nodes: MapNode[]; edges: MapEdge[] };
 }
 
 interface AnalysisData {
@@ -199,14 +208,6 @@ function extractClassNames(diagram: string): Set<string> {
   return names;
 }
 
-function extractActorNames(diagram: string): Set<string> {
-  const names = new Set<string>();
-  for (const m of diagram.matchAll(/^(?:participant|actor)\s+(\w+)/gm)) names.add(m[1]);
-  for (const m of diagram.matchAll(/^(\w+)(?:->>|-->|->|-->>)/gm)) names.add(m[1]);
-  for (const m of diagram.matchAll(/(?:->>|-->|->|-->>)(\w+):/gm)) names.add(m[1]);
-  return names;
-}
-
 // --- Animations ---
 const fadeUp = {
   hidden: { opacity: 0, y: 12 },
@@ -351,7 +352,7 @@ function ResultsPageContent() {
     selectedOptions.documentation ? 'documentation' : selectedOptions.flowchart ? 'uml' : 'quiz'
   );
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
-  const [activeSubTab, setActiveSubTab] = useState<'class' | 'sequence'>('class');
+  const [activeSubTab, setActiveSubTab] = useState<'architecture' | 'features' | 'class' | 'codebase'>('architecture');
   const [activeNode, setActiveNode] = useState<string | null>(null);
   const [diagramHeight, setDiagramHeight] = useState<number>(500);
   const [readingProgress, setReadingProgress] = useState<number>(0);
@@ -618,68 +619,117 @@ function ResultsPageContent() {
 
             {/* UML */}
             {activeTab === 'uml' && data?.uml && (() => {
-              // Class tab: show ALL descriptions (diagram nodes + utility functions/interfaces the AI included).
-              // Sequence tab: show only actors that appear in the diagram.
-              const sequenceActors = extractActorNames(data.uml.sequenceDiagram);
-              const panelDescriptions = activeSubTab === 'sequence'
-                ? Object.fromEntries(
-                    Object.entries(data.uml.descriptions).filter(
-                      ([name]) => sequenceActors.size === 0 || sequenceActors.has(name)
-                    )
-                  )
-                : data.uml.descriptions;
-              const panelLabel = activeSubTab === 'class' ? 'Components' : 'Actors';
+              const uml = data.uml;
+
+              // Derive per-tab data
+              const archCategories    = Object.fromEntries((uml.architecture?.nodes ?? []).map(n => [n.id, n.category]));
+              const archDescriptions  = Object.fromEntries((uml.architecture?.nodes ?? []).map(n => [n.id, n.description]));
+              const classCategories   = Object.fromEntries((uml.classDiagram?.classes ?? []).map(c => [c.name, c.category]));
+              const classDescriptions = Object.fromEntries((uml.classDiagram?.classes ?? []).map(c => [c.name, c.description]));
+
+              // Only show Class Diagram tab if the codebase has real class hierarchy
+              const showClassTab = uml.classDiagram?.hasClassHierarchy && uml.classDiagram.mermaid;
+              const showCodebaseTab = (uml.codebaseMap?.nodes?.length ?? 0) > 0;
+              const visibleSubTabs = [
+                { id: 'architecture' as const, label: 'Architecture' },
+                { id: 'features'     as const, label: 'Feature Flows' },
+                ...(showCodebaseTab ? [{ id: 'codebase' as const, label: 'Codebase Map' }] : []),
+                ...(showClassTab    ? [{ id: 'class'    as const, label: 'Class Diagram' }] : []),
+              ];
+
+              // Diagram-based tabs (architecture + class) use the fixed-height pan-zoom container
+              const isDiagramTab = activeSubTab === 'architecture' || activeSubTab === 'class';
 
               return (
                 <motion.div key="uml" variants={fadeUp} initial="hidden" animate="show" exit="exit" className="flex flex-col gap-4">
                   {/* Sub-tabs */}
                   <div className="flex gap-1">
-                    {(['class', 'sequence'] as const).map((t) => (
+                    {visibleSubTabs.map((t) => (
                       <button
-                        key={t}
-                        onClick={() => { setActiveSubTab(t); setActiveNode(null); }}
+                        key={t.id}
+                        onClick={() => { setActiveSubTab(t.id); setActiveNode(null); }}
                         className="px-4 py-2 text-xs font-medium rounded-lg transition-colors"
                         style={{
-                          backgroundColor: activeSubTab === t ? 'rgba(255,255,255,0.08)' : 'transparent',
-                          color: activeSubTab === t ? 'white' : 'rgb(113,113,122)',
+                          backgroundColor: activeSubTab === t.id ? 'rgba(255,255,255,0.08)' : 'transparent',
+                          color: activeSubTab === t.id ? 'white' : 'rgb(113,113,122)',
                         }}
                       >
-                        {t === 'class' ? 'Class Diagram' : 'Sequence Diagram'}
+                        {t.label}
                       </button>
                     ))}
                   </div>
 
-                  {/* Side-by-side: diagram + description panel */}
-                  <div
-                    className="flex gap-4"
-                    style={{ height: `${Math.min(Math.max(diagramHeight + 48, 380), Math.round(window.innerHeight * 0.82))}px` }}
-                  >
-                    {/* Diagram — pan/zoom viewport */}
-                    <div className="flex-1 min-w-0 rounded-xl border border-zinc-900 bg-zinc-950/60 overflow-hidden relative">
-                      <InteractiveDiagram
-                        key={activeSubTab}
-                        chart={activeSubTab === 'class' ? data.uml.classDiagram : data.uml.sequenceDiagram}
-                        id={activeSubTab === 'class' ? 'class-diagram' : 'sequence-diagram'}
-                        categories={data.uml.categories ?? {}}
-                        activeNode={activeNode}
-                        onNodeHover={setActiveNode}
-                        onNodeClick={(name) => setActiveNode((prev) => prev === name ? null : name)}
-                        onHeightReady={setDiagramHeight}
-                      />
+                  {/* Architecture — pan/zoom diagram + node panel */}
+                  {activeSubTab === 'architecture' && uml.architecture && (
+                    <div
+                      className="flex gap-4"
+                      style={{ height: `${Math.min(Math.max(diagramHeight + 48, 380), Math.round(window.innerHeight * 0.82))}px` }}
+                    >
+                      <div className="flex-1 min-w-0 rounded-xl border border-zinc-900 bg-zinc-950/60 overflow-hidden relative">
+                        <InteractiveDiagram
+                          key="architecture"
+                          chart={uml.architecture.mermaid}
+                          id="architecture-diagram"
+                          categories={archCategories}
+                          activeNode={activeNode}
+                          onNodeHover={setActiveNode}
+                          onNodeClick={(name) => setActiveNode((prev) => prev === name ? null : name)}
+                          onHeightReady={setDiagramHeight}
+                        />
+                      </div>
+                      <div className="w-72 shrink-0 rounded-xl border border-zinc-900 bg-zinc-950/60 overflow-hidden flex flex-col">
+                        <DescriptionPanel
+                          descriptions={archDescriptions}
+                          categories={archCategories}
+                          activeNode={activeNode}
+                          label="Architecture"
+                          onNodeHover={setActiveNode}
+                          onNodeClick={(name) => setActiveNode((prev) => prev === name ? null : name)}
+                        />
+                      </div>
                     </div>
+                  )}
 
-                    {/* Description panel — sticky header, independently scrollable list */}
-                    <div className="w-72 shrink-0 rounded-xl border border-zinc-900 bg-zinc-950/60 overflow-hidden flex flex-col">
-                      <DescriptionPanel
-                        descriptions={panelDescriptions}
-                        categories={data.uml.categories ?? {}}
-                        activeNode={activeNode}
-                        label={panelLabel}
-                        onNodeHover={setActiveNode}
-                        onNodeClick={(name) => setActiveNode((prev) => prev === name ? null : name)}
-                      />
+                  {/* Feature Flows — stacked cards with LR flowcharts + optional sequence drill-downs */}
+                  {activeSubTab === 'features' && uml.features?.length > 0 && (
+                    <FeatureFlowsView features={uml.features} repoUrl={repo} />
+                  )}
+
+                  {/* Codebase Map — React Flow + D3 force layout */}
+                  {activeSubTab === 'codebase' && uml.codebaseMap && (
+                    <CodebaseMapView nodes={uml.codebaseMap.nodes} edges={uml.codebaseMap.edges} />
+                  )}
+
+                  {/* Class Diagram — filtered to classes with relationships only */}
+                  {activeSubTab === 'class' && showClassTab && (
+                    <div
+                      className="flex gap-4"
+                      style={{ height: `${Math.min(Math.max(diagramHeight + 48, 380), Math.round(window.innerHeight * 0.82))}px` }}
+                    >
+                      <div className="flex-1 min-w-0 rounded-xl border border-zinc-900 bg-zinc-950/60 overflow-hidden relative">
+                        <InteractiveDiagram
+                          key="class"
+                          chart={uml.classDiagram!.mermaid!}
+                          id="class-diagram"
+                          categories={classCategories}
+                          activeNode={activeNode}
+                          onNodeHover={setActiveNode}
+                          onNodeClick={(name) => setActiveNode((prev) => prev === name ? null : name)}
+                          onHeightReady={setDiagramHeight}
+                        />
+                      </div>
+                      <div className="w-72 shrink-0 rounded-xl border border-zinc-900 bg-zinc-950/60 overflow-hidden flex flex-col">
+                        <DescriptionPanel
+                          descriptions={classDescriptions}
+                          categories={classCategories}
+                          activeNode={activeNode}
+                          label="Classes"
+                          onNodeHover={setActiveNode}
+                          onNodeClick={(name) => setActiveNode((prev) => prev === name ? null : name)}
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </motion.div>
               );
             })()}

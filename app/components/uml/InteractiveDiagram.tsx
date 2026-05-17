@@ -4,15 +4,34 @@ import { useEffect, useRef, useState } from "react";
 import { CATEGORY_META, BOX_COLORS, type Category } from "./categoryColors";
 
 function cleanChart(raw: string): string {
-  return raw
+  let result = raw
     .trim()
     .replace(/\r\n/g, "\n")
+    // classDiagram-specific fixes
     .replace(/^(\s*)interface\s+/gm, "$1class ")
     .replace(/^(\s*)enum\s+/gm, "$1class ")
     .replace(/^(\s*)abstract class\s+/gm, "$1class ")
     .replace(/: [A-Za-z]+\[\]/g, "")
     .replace(/: Record<[^>]+>/g, "")
-    .replace(/: [A-Za-z]+\|[A-Za-z| ]+/g, "");
+    .replace(/: [A-Za-z]+\|[A-Za-z| ]+/g, "")
+    // flowchart fix: strip parenthetical asides from node labels, e.g.
+    // [External APIs (e.g., Firebase)] → [External APIs]
+    // Mermaid misparses "(" inside "[…]" as a shape token.
+    .replace(/\[([^\]]*)\]/g, (_, content: string) =>
+      `[${content.replace(/\s*\([^)]*\)/g, '').trim()}]`
+    );
+
+  // flowchart-only fix: strip colon-based edge labels which are invalid Mermaid syntax.
+  // Gemini emits "A --> B[Label]: description text" but valid syntax is "A -->|label| B".
+  // Strip the ": text" suffix from any line that contains a flowchart arrow.
+  if (/^flowchart\b/i.test(result)) {
+    result = result.replace(
+      /^([^\n]*?(?:-->|--[^-\n]|-\.->|===)[^\n]*?)\s*:\s*[^\n]+$/gm,
+      '$1'
+    );
+  }
+
+  return result;
 }
 
 function injectClassDiagramStyles(chart: string, categories: Record<string, string>): string {
@@ -105,6 +124,28 @@ export default function InteractiveDiagram({
   const dragging = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
   const isDragged = useRef(false);
+  const svgViewBoxRef = useRef<{ vw: number; vh: number } | null>(null);
+
+  function fitToContainer() {
+    const vb = svgViewBoxRef.current;
+    if (!vb || !zoomContainerRef.current) return;
+    const { vw, vh } = vb;
+    const containerW = zoomContainerRef.current.clientWidth || 800;
+    const containerH = zoomContainerRef.current.clientHeight || 500;
+    const padding = 40;
+    // Fit to width so the diagram always fills the canvas horizontally.
+    // Only add the height constraint when the diagram is wider than tall
+    // (e.g. a compact classDiagram) — that way it stays fully visible without
+    // needing to scroll. For tall diagrams (typical sequence diagrams) we just
+    // fit the width and let the user pan vertically.
+    const scaleByWidth  = (containerW - padding) / vw;
+    const scaleByHeight = (containerH - padding) / vh;
+    const scaleToFit = vw >= vh
+      ? Math.min(scaleByWidth, scaleByHeight, 2)   // wider-than-tall: fit both axes
+      : Math.min(scaleByWidth, 2);                  // taller-than-wide: fit width only
+    setScale(scaleToFit);
+    setOffset({ x: (containerW - vw * scaleToFit) / 2, y: 20 });
+  }
 
   // Non-passive wheel listener so preventDefault() actually blocks page scroll
   useEffect(() => {
@@ -128,8 +169,29 @@ export default function InteractiveDiagram({
 
   const nodeMapRef = useRef<Map<SVGGElement, string>>(new Map());
 
+  // Fit to container after the SVG becomes visible (renderState flips to "done")
+  useEffect(() => {
+    if (renderState !== "done") return;
+    // Double-rAF: first frame lets React paint the container (display:block),
+    // second frame reads the now-valid clientWidth/clientHeight.
+    let raf1: number;
+    let raf2: number;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        fitToContainer();
+        // Also report height now that the container is visible
+        const svgEl = svgWrapRef.current?.querySelector("svg");
+        const h = svgEl?.getBoundingClientRect().height || svgEl?.getBBox?.()?.height;
+        if (h) onHeightReadyRef.current?.(h);
+      });
+    });
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderState]);
+
   useEffect(() => {
     let cancelled = false;
+    svgViewBoxRef.current = null;
     setRenderState("loading");
     setErrorMsg("");
     setScale(1);
@@ -158,10 +220,18 @@ export default function InteractiveDiagram({
       if (cancelled || !svgWrapRef.current) return;
 
       const cleaned = cleanChart(chart);
-      const isClass = cleaned.trimStart().startsWith('classDiagram');
-      const styled = Object.keys(categories).length > 0
-        ? (isClass ? injectClassDiagramStyles(cleaned, categories) : injectSequenceBoxes(cleaned, categories))
+      const isClass    = cleaned.trimStart().startsWith('classDiagram');
+      const isSequence = cleaned.trimStart().startsWith('sequenceDiagram');
+      // Inject direction TB so classDiagram uses a top-to-bottom layout engine instead of
+      // its default single-horizontal-rank, giving a readable multi-row grid.
+      const directed = isClass
+        ? cleaned.replace(/^(classDiagram[^\n]*\n)/, '$1  direction TB\n')
         : cleaned;
+      // classDiagram and flowchart both accept classDef/class styling lines.
+      // Only sequenceDiagram uses box-based grouping.
+      const styled = Object.keys(categories).length > 0
+        ? (isSequence ? injectSequenceBoxes(directed, categories) : injectClassDiagramStyles(directed, categories))
+        : directed;
 
       try {
         await mermaid.parse(styled);
@@ -180,15 +250,25 @@ export default function InteractiveDiagram({
           const svgEl = svgWrapRef.current.querySelector("svg");
           if (svgEl) {
             svgEl.removeAttribute("height");
-            svgEl.style.width = "100%";
-            svgEl.style.height = "auto";
-            svgEl.style.minWidth = "500px";
+            svgEl.removeAttribute("width");
             attachNodeHandlers(svgEl);
-            // Report natural SVG height for container auto-sizing
-            requestAnimationFrame(() => {
-              const h = svgEl.getBoundingClientRect().height || svgEl.getBBox?.()?.height;
-              if (h) onHeightReadyRef.current?.(h);
-            });
+            // Parse viewBox now (SVG is in DOM). Actual fitting happens in a useEffect
+            // that fires after renderState → "done" so the container is visible.
+            const viewBox = svgEl.getAttribute('viewBox');
+            const parts = (viewBox ?? '').split(/[\s,]+/).map(Number);
+            const vw = parts[2];
+            const vh = parts[3];
+            if (vw > 0 && vh > 0) {
+              svgViewBoxRef.current = { vw, vh };
+            } else {
+              // Fallback: use getBBox for SVGs without an explicit viewBox
+              requestAnimationFrame(() => {
+                const bbox = svgEl.getBBox?.();
+                if (bbox?.width > 0) svgViewBoxRef.current = { vw: bbox.width, vh: bbox.height };
+                const h = bbox?.height || svgEl.getBoundingClientRect().height;
+                if (h) onHeightReadyRef.current?.(h);
+              });
+            }
           }
           setRenderState("done");
         }
@@ -308,7 +388,7 @@ export default function InteractiveDiagram({
           {([
             { label: "+", title: "Zoom in",  action: () => setScale((s) => Math.min(4, s * 1.3)) },
             { label: "−", title: "Zoom out", action: () => setScale((s) => Math.max(0.3, s / 1.3)) },
-            { label: "⊡", title: "Fit",      action: () => { setScale(1); setOffset({ x: 0, y: 0 }); } },
+            { label: "⊡", title: "Fit",      action: () => fitToContainer() },
           ] as const).map(({ label, title, action }) => (
             <button
               key={label}

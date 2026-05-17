@@ -233,15 +233,28 @@ function processMarkdown(markdown: string): { html: string; mermaidBlocks: Array
     }
   );
   
-  // Process other code blocks
-  // Note: data-code is intentionally NOT used — raw code in an attribute breaks on quotes/angle-brackets.
-  // DocumentationContent reads code via codeEl.textContent instead.
+  // Process other code blocks.
+  // The copy button is generated statically here (not via useEffect) so it's always present.
+  // encodeURIComponent on the code keeps the data attribute safe for any content.
+  const copyIcon = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
   processed = processed.replace(
     /```(\w+)?\n([\s\S]*?)```/g,
     (_, lang, code) => {
       const language = lang || 'text';
       const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      return `<pre class="bg-zinc-900 border border-zinc-800 rounded-xl text-xs font-mono text-zinc-300 my-4 overflow-hidden" data-lang="${language}"><code>${escaped}</code></pre>`;
+      const encoded = encodeURIComponent(code.trimEnd());
+      const langLabel = language === 'text' ? 'code' : language;
+      return (
+        `<div class="my-5 rounded-xl border border-zinc-800 overflow-hidden bg-zinc-900 text-xs font-mono">` +
+          `<div class="flex items-center justify-between px-4 py-2 border-b border-zinc-800 bg-zinc-950/60">` +
+            `<span class="text-[10px] text-zinc-500 uppercase tracking-wider">${langLabel}</span>` +
+            `<button class="copy-code-btn flex items-center gap-1.5 px-2 py-1 text-[11px] text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded transition-colors" data-code="${encoded}">` +
+              `${copyIcon}<span>Copy</span>` +
+            `</button>` +
+          `</div>` +
+          `<div class="overflow-x-auto p-4"><code class="text-zinc-300 leading-relaxed" data-lang="${language}">${escaped}</code></div>` +
+        `</div>`
+      );
     }
   );
   
@@ -464,18 +477,21 @@ function ResultsPageContent() {
         className="border-b border-zinc-900 px-6 py-4 flex items-center justify-between sticky top-0 bg-black/80 backdrop-blur-sm z-40"
         role="banner"
       >
-        <div>
-          <p className="text-[11px] text-zinc-600 uppercase tracking-widest mb-0.5">
-            {loading ? 'Analyzing' : error ? 'Error' : 'Report'}
-          </p>
-          <p className="text-sm font-mono text-zinc-300 truncate max-w-xs" title={repo}>{repo || '—'}</p>
-        </div>
         <div className="flex items-center gap-4">
+          <div>
+            <p className="text-[11px] text-zinc-600 uppercase tracking-widest mb-0.5">
+              {loading ? 'Analyzing' : error ? 'Error' : 'Report'}
+            </p>
+            <p className="text-sm font-mono text-zinc-300 truncate max-w-xs" title={repo}>{repo || '—'}</p>
+          </div>
           {activeTab === 'documentation' && !loading && !error && readingProgress > 0 && (
-            <div className="text-xs text-zinc-600 hidden sm:block">
-              {Math.round(readingProgress)}% read
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800">
+              <div className="w-1.5 h-1.5 rounded-full bg-white/40" />
+              <span className="text-[11px] text-zinc-500">{Math.round(readingProgress)}%</span>
             </div>
           )}
+        </div>
+        <div className="flex items-center gap-4">
           <motion.div whileHover={{ x: -2 }} transition={{ duration: 0.15 }}>
             <Link
               href="/"

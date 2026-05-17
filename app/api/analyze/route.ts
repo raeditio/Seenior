@@ -1,12 +1,18 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { parseGitHubUrl, getRepositoryInfo, getAllCodeFiles, type CodeFile } from '../github/lib';
+import { NextRequest, NextResponse } from 'next/server';
+import { getAllCodeFiles, getRepositoryInfo, parseGitHubUrl, type CodeFile } from '../github/lib';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
+const GENERATION_CONFIG = {
+  temperature: 0,      // fully deterministic output
+  topP: 1,
+  topK: 1,
+};
+
 // Generate documentation using Gemini
 async function generateDocumentation(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash', generationConfig: GENERATION_CONFIG });
   
   const filesContext = files.map(f => `
 File: ${f.path}
@@ -41,8 +47,11 @@ Format the response in clean Markdown with proper headings, code blocks, and lis
 
 // Generate UML diagram using Gemini
 async function generateUML(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
-  
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-2.5-flash',
+    generationConfig: { ...GENERATION_CONFIG, responseMimeType: 'application/json' },
+  });
+
   const filesContext = files.map(f => `
 File: ${f.path}
 Language: ${f.language}
@@ -52,28 +61,69 @@ ${f.content.substring(0, 2000)}${f.content.length > 2000 ? '...' : ''}
 \`\`\`
 `).join('\n\n');
 
-  const prompt = `You are a software architecture expert. Analyze the following code repository "${repoName}" and generate UML diagrams.
+  const prompt = `You are a software architecture expert. Analyze the code repository "${repoName}".
+
+Return a single JSON object with exactly these four keys:
+
+{
+  "classDiagram": "<valid Mermaid classDiagram string>",
+  "sequenceDiagram": "<valid Mermaid sequenceDiagram string>",
+  "descriptions": {
+    "<NodeOrActorName>": "<one sentence plain-English description>"
+  },
+  "categories": {
+    "<NodeOrActorName>": "<page|route|external|internal|actor>"
+  }
+}
+
+Rules for the CLASS DIAGRAM:
+- Include AT MOST 7 of the most architecturally important classes/modules. Skip utility helpers, config files, and anything not central to the main data flow.
+- Show AT MOST 2-3 members per class — only the most important ones.
+- Show AT MOST 5 relationships total. Prefer composition (-->) over inheritance. Drop trivial or obvious relationships.
+- Do NOT show every file in the repo — be selective. A focused diagram with 5 nodes is better than a cluttered one with 15.
+
+Rules for the SEQUENCE DIAGRAM:
+- Show AT MOST 5 actors. Each actor name must be UNIQUE — never declare the same participant twice.
+- Show only the primary happy-path request flow — skip error handling, retries, and edge cases.
+- Keep it to AT MOST 10 messages total.
+
+Rules for both diagrams:
+- Use valid Mermaid v11 syntax only.
+- In classDiagram: use ONLY the keyword "class", never "interface", "enum", or "abstract class".
+- Actor and class names must be plain alphanumeric — no parentheses, colons, angle brackets, or special characters.
+- Member types must be simple words only (string, number, boolean) — no arrays like string[], no generics, no union types.
+- Do not include markdown fences inside the JSON strings — just the raw diagram text starting with "classDiagram" or "sequenceDiagram".
+
+Rules for "descriptions":
+- Must include one entry for every class in the classDiagram and every actor in the sequenceDiagram.
+- ALSO include entries for up to 8 additional important utility functions, helper modules, or key interfaces that appear in the codebase but are not nodes in the diagrams (e.g. parseGitHubUrl, getRepositoryInfo, generateDocumentation). These give onboarding engineers the detail they need.
+- Each description is one plain-English sentence.
+
+Rules for "categories":
+- Must include one entry for every name in "descriptions".
+- Use exactly one of these five values: page, route, external, internal, actor.
+  - page: frontend React pages/components and client-side entry points
+  - route: Next.js API routes and server-side request handlers
+  - external: third-party APIs and services (GitHub, Gemini, Octokit, etc.)
+  - internal: internal utilities, helper modules, and library functions
+  - actor: human users, browsers, or generic client actors in sequence diagrams
 
 Repository Files:
-${filesContext}
-
-Please provide:
-1. **Class Diagram**: Show the main classes, their attributes, methods, and relationships (in Mermaid syntax)
-2. **Sequence Diagram**: Show the flow of a typical user interaction (in Mermaid syntax)
-3. **Component Diagram**: Show the high-level components and their dependencies (in Mermaid syntax)
-4. **Architecture Explanation**: Explain the architecture and design patterns
-
-Use Mermaid diagram syntax for all diagrams. Format each diagram in a code block with \`\`\`mermaid.
-Provide clear explanations for each diagram.`;
+${filesContext}`;
 
   const result = await model.generateContent(prompt);
-  const response = await result.response;
-  return response.text();
+  const text = result.response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const stripped = text.replace(/^```json\s*|```\s*$/g, '').trim();
+    return JSON.parse(stripped);
+  }
 }
 
 // Generate quiz using Gemini
 async function generateQuiz(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash', generationConfig: GENERATION_CONFIG });
   
   const filesContext = files.map(f => `
 File: ${f.path}

@@ -333,8 +333,8 @@ Special thanks to all contributors and the open-source community.
 ---
 
 ## Key Contributors:
-[raeditio](https://github.com/raeditio)
-[jinhoyon](https://github.com/jinhoyon)
+- **[raeditio](https://github.com/raeditio)**
+- **[jinhoyon](https://github.com/jinhoyon)**
 
 **Made with care for developers by developers**
 

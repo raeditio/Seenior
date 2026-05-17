@@ -29,8 +29,10 @@ function injectClassDiagramStyles(chart: string, categories: Record<string, stri
     return m ? `classDef ${cat} fill:${m.fill},stroke:${m.stroke},color:#fff` : '';
   }).filter(Boolean);
 
+  // `class NodeA,NodeB styleName` applies a classDef to named nodes in classDiagram.
+  // `cssClass "NodeA" styleName` applies an HTML CSS class — NOT a classDef — and has no effect here.
   const cssClassLines = Object.entries(grouped).map(
-    ([cat, names]) => `cssClass "${names.join(',')}" ${cat}`
+    ([cat, names]) => `class ${names.join(',')} ${cat}`
   );
 
   return [

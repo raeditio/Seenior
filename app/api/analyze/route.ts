@@ -32,11 +32,10 @@ Please provide:
 1. **Project Overview**: What does this project do? What problem does it solve?
 2. **Architecture**: Describe the overall architecture and design patterns used
 3. **Key Components**: List and explain the main components/modules
-4. **File Structure**: Explain the organization of files and directories
-5. **Technologies Used**: List the programming languages, frameworks, and libraries
-6. **Setup Instructions**: How to set up and run the project
-7. **API/Functions**: Document key functions, classes, or APIs
-8. **Code Examples**: Show how to use the main features
+4. **Technologies Used**: List the programming languages, frameworks, and libraries
+5. **Setup Instructions**: How to set up and run the project
+6. **API/Functions**: Document key functions, classes, or APIs
+7. **Code Examples**: Show how to use the main features
 
 Format the response in clean Markdown with proper headings, code blocks, and lists.`;
 
@@ -143,7 +142,6 @@ Generate 10 multiple-choice questions covering:
 - Architecture and design patterns
 - Key functions and their behavior
 - Best practices used in the code
-- Potential improvements or issues
 
 Format as JSON array with this structure:
 [

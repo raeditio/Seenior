@@ -1,318 +1,364 @@
-'use client';
+"use client";
 
-import { useEffect, useRef, useState } from 'react';
-import { type Category, getCategoryColor } from './categoryColors';
+import { useEffect, useRef, useState } from "react";
+import { CATEGORY_META, BOX_COLORS, type Category } from "./categoryColors";
+
+function cleanChart(raw: string): string {
+  return raw
+    .trim()
+    .replace(/\r\n/g, "\n")
+    .replace(/^(\s*)interface\s+/gm, "$1class ")
+    .replace(/^(\s*)enum\s+/gm, "$1class ")
+    .replace(/^(\s*)abstract class\s+/gm, "$1class ")
+    .replace(/: [A-Za-z]+\[\]/g, "")
+    .replace(/: Record<[^>]+>/g, "")
+    .replace(/: [A-Za-z]+\|[A-Za-z| ]+/g, "");
+}
+
+function injectClassDiagramStyles(chart: string, categories: Record<string, string>): string {
+  if (!Object.keys(categories).length) return chart;
+
+  const grouped = Object.entries(categories).reduce<Record<string, string[]>>((acc, [name, cat]) => {
+    (acc[cat] ??= []).push(name);
+    return acc;
+  }, {});
+
+  const used = new Set(Object.values(categories));
+  const classDefLines = [...used].map((cat) => {
+    const m = CATEGORY_META[cat as Category];
+    return m ? `classDef ${cat} fill:${m.fill},stroke:${m.stroke},color:#fff` : '';
+  }).filter(Boolean);
+
+  const cssClassLines = Object.entries(grouped).map(
+    ([cat, names]) => `cssClass "${names.join(',')}" ${cat}`
+  );
+
+  return [
+    chart,
+    'classDef default fill:#18181b,stroke:#3f3f46,color:#a1a1aa',
+    ...classDefLines,
+    ...cssClassLines,
+  ].join('\n');
+}
+
+function injectSequenceBoxes(chart: string, categories: Record<string, string>): string {
+  if (!Object.keys(categories).length) return chart;
+
+  const lines = chart.split('\n');
+  const header = lines[0];
+  const participantRe = /^\s*(participant|actor)\s+(\w+)/;
+  const participantLines: string[] = [];
+  const otherLines: string[] = [];
+
+  lines.slice(1).forEach((line) => {
+    if (participantRe.test(line)) participantLines.push(line.trim());
+    else otherLines.push(line);
+  });
+
+  const groups: Record<string, string[]> = {};
+  participantLines.forEach((line) => {
+    const m = line.match(participantRe);
+    const name = m?.[2] ?? '';
+    const cat = categories[name] ?? 'internal';
+    (groups[cat] ??= []).push(line);
+  });
+
+  // Only inject boxes when participants are spread across 2+ categories —
+  // a single category box paints the whole diagram one color which is worse than nothing.
+  if (Object.keys(groups).length < 2) return chart;
+
+  const boxLines: string[] = [];
+  for (const [cat, participants] of Object.entries(groups)) {
+    const color = BOX_COLORS[cat as Category] ?? 'rgb(39,39,42)';
+    const label = CATEGORY_META[cat as Category]?.label ?? cat;
+    boxLines.push(`    box ${color} ${label}`);
+    participants.forEach((p) => boxLines.push(`    ${p}`));
+    boxLines.push('    end');
+  }
+
+  return [header, ...boxLines, ...otherLines].join('\n');
+}
 
 interface Props {
   chart: string;
   id: string;
-  categories: Record<string, Category>;
+  categories?: Record<string, string>;
   activeNode: string | null;
   onNodeHover: (name: string | null) => void;
   onNodeClick: (name: string) => void;
-  onHeightReady: (height: number) => void;
+  onHeightReady?: (height: number) => void;
 }
 
 export default function InteractiveDiagram({
-  chart,
-  id,
-  categories,
-  activeNode,
-  onNodeHover,
-  onNodeClick,
-  onHeightReady,
+  chart, id, categories = {}, activeNode, onNodeHover, onNodeClick, onHeightReady,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const [scale, setScale] = useState(1);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const svgWrapRef = useRef<HTMLDivElement>(null);
+  const zoomContainerRef = useRef<HTMLDivElement>(null);
+  const [renderState, setRenderState] = useState<"loading" | "done" | "error">("loading");
+  const [errorMsg, setErrorMsg] = useState("");
 
-  // Render Mermaid diagram
+  // Pan/zoom
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const dragging = useRef(false);
+  const lastPos = useRef({ x: 0, y: 0 });
+  const isDragged = useRef(false);
+
+  // Non-passive wheel listener so preventDefault() actually blocks page scroll
+  useEffect(() => {
+    const el = zoomContainerRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = e.deltaY > 0 ? 0.9 : 1.1;
+      setScale((s) => Math.min(4, Math.max(0.3, s * factor)));
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, []);
+
+  const onNodeHoverRef = useRef(onNodeHover);
+  const onNodeClickRef = useRef(onNodeClick);
+  const onHeightReadyRef = useRef(onHeightReady);
+  useEffect(() => { onNodeHoverRef.current = onNodeHover; }, [onNodeHover]);
+  useEffect(() => { onNodeClickRef.current = onNodeClick; }, [onNodeClick]);
+  useEffect(() => { onHeightReadyRef.current = onHeightReady; }, [onHeightReady]);
+
+  const nodeMapRef = useRef<Map<SVGGElement, string>>(new Map());
+
   useEffect(() => {
     let cancelled = false;
+    setRenderState("loading");
+    setErrorMsg("");
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
 
     async function render() {
-      const mermaid = (await import('mermaid')).default;
+      const mermaid = (await import("mermaid")).default;
       mermaid.initialize({
         startOnLoad: false,
-        theme: 'dark',
+        theme: "dark",
+        suppressErrorRendering: true,
         themeVariables: {
-          darkMode: true,
-          background: '#000000',
-          primaryColor: '#1f1f1f',
-          primaryTextColor: '#e4e4e7',
-          primaryBorderColor: '#3f3f46',
-          lineColor: '#52525b',
-          secondaryColor: '#18181b',
-          tertiaryColor: '#27272a',
+          background: "#09090b",
+          mainBkg: "#18181b",
+          nodeBorder: "#3f3f46",
+          lineColor: "#52525b",
+          textColor: "#a1a1aa",
+          edgeLabelBackground: "#18181b",
+          clusterBkg: "#18181b",
+          titleColor: "#e4e4e7",
+          fontFamily: "ui-monospace, monospace",
+          fontSize: "14px",
         },
       });
 
-      if (cancelled || !containerRef.current) return;
+      if (cancelled || !svgWrapRef.current) return;
+
+      const cleaned = cleanChart(chart);
+      const isClass = cleaned.trimStart().startsWith('classDiagram');
+      const styled = Object.keys(categories).length > 0
+        ? (isClass ? injectClassDiagramStyles(cleaned, categories) : injectSequenceBoxes(cleaned, categories))
+        : cleaned;
 
       try {
-        const { svg } = await mermaid.render(id, chart);
-        if (!cancelled && containerRef.current) {
-          containerRef.current.innerHTML = svg;
-          const svgElement = containerRef.current.querySelector('svg');
-          if (svgElement) {
-            svgRef.current = svgElement;
-            
-            // Get SVG dimensions and report height
-            const bbox = svgElement.getBBox();
-            const height = bbox.height || 400;
-            onHeightReady(height);
-
-            // Center the diagram initially
-            const containerWidth = containerRef.current.clientWidth;
-            const containerHeight = containerRef.current.clientHeight;
-            const svgWidth = bbox.width || 800;
-            
-            // Calculate initial scale to fit
-            const scaleToFit = Math.min(
-              containerWidth / svgWidth,
-              containerHeight / height,
-              1
-            );
-            setScale(scaleToFit * 0.9); // 90% to add some padding
-            
-            // Center position
-            setPosition({
-              x: (containerWidth - svgWidth * scaleToFit * 0.9) / 2,
-              y: 20, // Small top padding
-            });
-
-            // Setup node interactions
-            setupNodeInteractions(svgElement);
-          }
+        await mermaid.parse(styled);
+      } catch (err) {
+        if (!cancelled) {
+          setErrorMsg(err instanceof Error ? err.message : "Invalid diagram syntax");
+          setRenderState("error");
         }
-      } catch (error) {
-        console.error('Mermaid rendering error:', error);
+        return;
+      }
+
+      try {
+        const { svg } = await mermaid.render(id, styled);
+        if (!cancelled && svgWrapRef.current) {
+          svgWrapRef.current.innerHTML = svg;
+          const svgEl = svgWrapRef.current.querySelector("svg");
+          if (svgEl) {
+            svgEl.removeAttribute("height");
+            svgEl.style.width = "100%";
+            svgEl.style.height = "auto";
+            svgEl.style.minWidth = "500px";
+            attachNodeHandlers(svgEl);
+            // Report natural SVG height for container auto-sizing
+            requestAnimationFrame(() => {
+              const h = svgEl.getBoundingClientRect().height || svgEl.getBBox?.()?.height;
+              if (h) onHeightReadyRef.current?.(h);
+            });
+          }
+          setRenderState("done");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setErrorMsg(err instanceof Error ? err.message : "Render failed");
+          setRenderState("error");
+        }
       }
     }
 
     render();
-    return () => {
-      cancelled = true;
-    };
-  }, [chart, id, onHeightReady]);
+    return () => { cancelled = true; };
+  }, [chart, id, categories]);
 
-  // Setup node click and hover handlers
-  function setupNodeInteractions(svg: SVGSVGElement) {
-    // Find all node elements (class nodes and sequence diagram participants)
-    const nodes = svg.querySelectorAll('.node, .actor, .participant');
-    
-    nodes.forEach((node) => {
-      const element = node as SVGElement;
-      
-      // Extract node name from various possible locations
-      let nodeName = '';
-      const textElement = element.querySelector('text, .nodeLabel, .label');
-      if (textElement) {
-        nodeName = textElement.textContent?.trim() || '';
+  function getNodeName(el: Element): string | null {
+    const elId = el.getAttribute("id") ?? "";
+    const cls = el.getAttribute("class") ?? "";
+
+    const isSequenceNode =
+      cls.includes("actor") ||
+      cls.includes("participant") ||
+      elId.startsWith("actor");
+    if (isSequenceNode) {
+      for (const t of el.querySelectorAll("text")) {
+        const content = t.textContent?.trim() ?? "";
+        if (content && content.length > 0 && content.length < 60) return content;
       }
-      
-      // Also check for id-based naming
-      if (!nodeName && element.id) {
-        nodeName = element.id.replace(/^flowchart-|^node-/, '');
+      const fo = el.querySelector("foreignObject");
+      if (fo?.textContent?.trim()) {
+        const firstLine = fo.textContent.trim().split(/\n/)[0].trim();
+        if (firstLine) return firstLine;
       }
+    }
 
-      if (!nodeName) return;
+    const classIdMatch = elId.match(/^classId-(.+)-\d+$/);
+    if (classIdMatch) return classIdMatch[1];
 
-      // Make interactive
-      element.style.cursor = 'pointer';
-      element.style.transition = 'opacity 0.2s';
+    const dataId = el.getAttribute("data-id");
+    if (dataId?.trim()) return dataId.trim();
 
-      element.addEventListener('mouseenter', () => {
-        onNodeHover(nodeName);
-      });
+    const fo = el.querySelector("foreignObject");
+    if (fo?.textContent?.trim()) {
+      const firstLine = fo.textContent.trim().split(/\n/)[0].trim();
+      if (firstLine) return firstLine;
+    }
 
-      element.addEventListener('mouseleave', () => {
-        onNodeHover(null);
-      });
+    const title = el.querySelector("title");
+    if (title?.textContent?.trim()) return title.textContent.trim();
 
-      element.addEventListener('click', (e) => {
-        e.stopPropagation();
-        onNodeClick(nodeName);
-      });
-    });
+    const text = el.querySelector("text");
+    return text?.textContent?.trim() ?? null;
   }
 
-  // Apply category colors and active state to nodes
+  function attachNodeHandlers(svgEl: SVGSVGElement) {
+    nodeMapRef.current.clear();
+
+    function wire(g: SVGGElement) {
+      if (nodeMapRef.current.has(g)) return;
+      let ancestor = g.parentElement;
+      while (ancestor && ancestor !== (svgEl as unknown as HTMLElement)) {
+        if (nodeMapRef.current.has(ancestor as unknown as SVGGElement)) return;
+        ancestor = ancestor.parentElement;
+      }
+      const name = getNodeName(g);
+      if (!name) return;
+      nodeMapRef.current.set(g, name);
+      g.style.cursor = "pointer";
+      g.addEventListener("mouseenter", () => onNodeHoverRef.current(name));
+      g.addEventListener("mouseleave", () => onNodeHoverRef.current(null));
+      g.addEventListener("click", () => {
+        if (!isDragged.current) onNodeClickRef.current(name);
+      });
+    }
+
+    svgEl.querySelectorAll<SVGGElement>("g.node, g.classGroup, g[id^='classId-']").forEach(wire);
+    svgEl.querySelectorAll<SVGGElement>(
+      "g.actor, g.participant, g[class*='actor'], g[class*='participant'], g[id^='actor']"
+    ).forEach(wire);
+  }
+
   useEffect(() => {
-    if (!svgRef.current) return;
-
-    const nodes = svgRef.current.querySelectorAll('.node, .actor, .participant');
-    
-    nodes.forEach((node) => {
-      const element = node as SVGElement;
-      let nodeName = '';
-      
-      const textElement = element.querySelector('text, .nodeLabel, .label');
-      if (textElement) {
-        nodeName = textElement.textContent?.trim() || '';
-      }
-      
-      if (!nodeName && element.id) {
-        nodeName = element.id.replace(/^flowchart-|^node-/, '');
-      }
-
-      if (!nodeName) return;
-
-      const category = categories[nodeName];
-      const colors = getCategoryColor(category);
-      const isActive = activeNode === nodeName;
-
-      // Apply colors to rect/path elements
-      const shapes = element.querySelectorAll('rect, path, polygon, circle, ellipse');
-      shapes.forEach((shape) => {
-        const shapeElement = shape as SVGElement;
-        if (isActive) {
-          shapeElement.style.fill = colors.bg;
-          shapeElement.style.stroke = colors.border;
-          shapeElement.style.strokeWidth = '2px';
-          shapeElement.style.filter = 'brightness(1.3)';
-        } else if (category) {
-          shapeElement.style.fill = colors.bg;
-          shapeElement.style.stroke = colors.border;
-          shapeElement.style.strokeWidth = '1px';
-          shapeElement.style.filter = 'none';
-        } else {
-          shapeElement.style.filter = 'none';
-        }
+    if (renderState !== "done") return;
+    nodeMapRef.current.forEach((name, g) => {
+      const isActive = activeNode !== null && name === activeNode;
+      g.style.opacity = activeNode === null || isActive ? "1" : "0.25";
+      g.style.transition = "opacity 0.15s";
+      g.querySelectorAll<SVGRectElement>("rect").forEach((rect) => {
+        rect.style.stroke = isActive ? "rgba(255,255,255,0.85)" : "";
+        rect.style.strokeWidth = isActive ? "2" : "";
+        rect.style.transition = "stroke 0.15s, stroke-width 0.15s";
       });
-
-      // Apply colors to text
-      const texts = element.querySelectorAll('text, .nodeLabel, .label');
-      texts.forEach((text) => {
-        const textElement = text as SVGElement;
-        if (category) {
-          textElement.style.fill = colors.text;
-        }
-      });
-
-      // Opacity for non-active nodes when one is active
-      if (activeNode && !isActive) {
-        element.style.opacity = '0.4';
-      } else {
-        element.style.opacity = '1';
-      }
     });
-  }, [categories, activeNode]);
+  }, [activeNode, renderState]);
 
-  // Pan and zoom handlers
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY * -0.001;
-    const newScale = Math.min(Math.max(0.3, scale + delta), 3);
-    setScale(newScale);
-  };
+  function handleMouseDown(e: React.MouseEvent) {
+    dragging.current = true;
+    isDragged.current = false;
+    lastPos.current = { x: e.clientX, y: e.clientY };
+  }
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 0) { // Left click only
-      setIsDragging(true);
-      setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
-    }
-  };
+  function handleMouseMove(e: React.MouseEvent) {
+    if (!dragging.current) return;
+    const dx = e.clientX - lastPos.current.x;
+    const dy = e.clientY - lastPos.current.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) isDragged.current = true;
+    lastPos.current = { x: e.clientX, y: e.clientY };
+    setOffset((o) => ({ x: o.x + dx, y: o.y + dy }));
+  }
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging) {
-      setPosition({
-        x: e.clientX - dragStart.x,
-        y: e.clientY - dragStart.y,
-      });
-    }
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
-
-  const handleMouseLeave = () => {
-    setIsDragging(false);
-  };
-
-  // Reset view
-  const handleReset = () => {
-    if (!containerRef.current || !svgRef.current) return;
-    
-    const bbox = svgRef.current.getBBox();
-    const containerWidth = containerRef.current.clientWidth;
-    const containerHeight = containerRef.current.clientHeight;
-    const svgWidth = bbox.width || 800;
-    const height = bbox.height || 400;
-    
-    const scaleToFit = Math.min(
-      containerWidth / svgWidth,
-      containerHeight / height,
-      1
-    );
-    
-    setScale(scaleToFit * 0.9);
-    setPosition({
-      x: (containerWidth - svgWidth * scaleToFit * 0.9) / 2,
-      y: 20,
-    });
-  };
+  function handleMouseUp() { dragging.current = false; }
 
   return (
-    <div className="relative w-full h-full">
-      {/* Controls */}
-      <div className="absolute top-3 right-3 z-10 flex gap-2">
-        <button
-          onClick={() => setScale((s) => Math.min(s + 0.2, 3))}
-          className="w-8 h-8 rounded-lg bg-zinc-900/80 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors flex items-center justify-center text-lg"
-          title="Zoom in"
-          aria-label="Zoom in"
-        >
-          +
-        </button>
-        <button
-          onClick={() => setScale((s) => Math.max(s - 0.2, 0.3))}
-          className="w-8 h-8 rounded-lg bg-zinc-900/80 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors flex items-center justify-center text-lg"
-          title="Zoom out"
-          aria-label="Zoom out"
-        >
-          −
-        </button>
-        <button
-          onClick={handleReset}
-          className="px-3 h-8 rounded-lg bg-zinc-900/80 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors flex items-center justify-center text-xs"
-          title="Reset view"
-          aria-label="Reset view"
-        >
-          Reset
-        </button>
-      </div>
+    <div className="relative w-full h-full flex flex-col">
+      {renderState === "done" && (
+        <div className="absolute top-3 right-3 z-10 flex flex-col gap-1">
+          {([
+            { label: "+", title: "Zoom in",  action: () => setScale((s) => Math.min(4, s * 1.3)) },
+            { label: "−", title: "Zoom out", action: () => setScale((s) => Math.max(0.3, s / 1.3)) },
+            { label: "⊡", title: "Fit",      action: () => { setScale(1); setOffset({ x: 0, y: 0 }); } },
+          ] as const).map(({ label, title, action }) => (
+            <button
+              key={label}
+              title={title}
+              onClick={action}
+              className="w-7 h-7 rounded-md bg-zinc-900/90 border border-zinc-800 text-xs text-zinc-400 hover:text-white hover:border-zinc-600 transition-colors flex items-center justify-center select-none"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {/* Diagram viewport */}
+      {renderState === "loading" && (
+        <div className="flex items-center gap-2 py-16 justify-center flex-1">
+          <div className="w-4 h-4 rounded-full border-2 border-zinc-700 border-t-zinc-400 animate-spin" />
+          <span className="text-xs text-zinc-600">Rendering diagram…</span>
+        </div>
+      )}
+
+      {renderState === "error" && (
+        <div className="py-6 flex flex-col gap-3 p-4 flex-1">
+          <p className="text-xs text-zinc-500">Could not render diagram — showing raw source</p>
+          {errorMsg && <p className="text-xs text-red-400/70 font-mono">{errorMsg}</p>}
+          <pre className="text-[11px] text-zinc-600 font-mono overflow-x-auto whitespace-pre-wrap break-all bg-zinc-900/60 border border-zinc-800 rounded-lg p-4">
+            {chart}
+          </pre>
+        </div>
+      )}
+
       <div
-        className="w-full h-full overflow-hidden"
-        onWheel={handleWheel}
+        ref={zoomContainerRef}
+        className="flex-1 overflow-hidden"
+        style={{
+          display: renderState === "done" ? "block" : "none",
+          cursor: dragging.current ? "grabbing" : "grab",
+        }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
-        style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+        onMouseLeave={handleMouseUp}
       >
         <div
-          ref={containerRef}
+          ref={svgWrapRef}
           style={{
-            transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
-            transformOrigin: '0 0',
-            transition: isDragging ? 'none' : 'transform 0.1s',
+            transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+            transformOrigin: "top left",
+            transition: dragging.current ? "none" : "transform 0.05s ease-out",
+            padding: "16px",
           }}
         />
-      </div>
-
-      {/* Instructions */}
-      <div className="absolute bottom-3 left-3 text-[10px] text-zinc-600 bg-zinc-900/60 px-2 py-1 rounded">
-        Scroll to zoom • Drag to pan • Click nodes for details
       </div>
     </div>
   );
 }
-
-// Made with Bob

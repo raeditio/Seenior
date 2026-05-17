@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState } from "react";
 
 const SECTIONS = [
   { id: "documentation", label: "Documentation", desc: "Summary, key files, business logic" },
@@ -49,8 +49,11 @@ export default function Home() {
   }
 
   return (
-    <main className="relative flex flex-col items-center justify-center min-h-screen px-6 overflow-hidden bg-black">
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+    <main
+      className="relative flex flex-col items-center justify-center min-h-screen px-6 overflow-hidden bg-black"
+      role="main"
+    >
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center" aria-hidden="true">
         <div className="h-[600px] w-[600px] rounded-full bg-white/[0.03] blur-3xl" />
       </div>
 
@@ -60,6 +63,7 @@ export default function Home() {
         initial="hidden"
         animate="show"
         className="relative flex flex-col gap-10 w-full max-w-lg"
+        aria-label="Repository analysis form"
       >
         <motion.div variants={item}>
           <span className="text-xs font-semibold tracking-[0.2em] text-zinc-600 uppercase">Seenior</span>
@@ -91,12 +95,15 @@ export default function Home() {
               onBlur={() => setFocused(false)}
               placeholder="github.com/user/repo"
               className="w-full bg-zinc-900/60 backdrop-blur px-5 py-4 text-white placeholder:text-zinc-600 focus:outline-none text-sm"
+              aria-label="GitHub repository URL"
+              aria-required="true"
+              aria-invalid={repoUrl.trim().length > 0 && !repoUrl.includes('github.com')}
             />
           </motion.div>
         </motion.div>
 
         <motion.div variants={item} className="flex flex-col gap-2">
-          <p className="text-xs text-zinc-600 uppercase tracking-widest mb-1">Generate</p>
+          <p className="text-xs text-zinc-600 uppercase tracking-widest mb-1" id="generate-label">Generate</p>
           {SECTIONS.map(({ id, label, desc }) => {
             const checked = selected.has(id);
             return (
@@ -110,8 +117,16 @@ export default function Home() {
                   border: checked ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(255,255,255,0.04)",
                   transition: "background 0.2s, border-color 0.2s",
                 }}
+                htmlFor={`section-${id}`}
               >
-                <input type="checkbox" checked={checked} onChange={() => toggleSection(id)} className="sr-only" />
+                <input
+                  type="checkbox"
+                  id={`section-${id}`}
+                  checked={checked}
+                  onChange={() => toggleSection(id)}
+                  className="sr-only"
+                  aria-describedby={`section-${id}-desc`}
+                />
                 <motion.div
                   animate={{
                     backgroundColor: checked ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.05)",
@@ -136,7 +151,7 @@ export default function Home() {
                 </motion.div>
                 <div className="flex flex-col gap-0.5">
                   <span className="text-sm font-medium text-white">{label}</span>
-                  <span className="text-xs text-zinc-600">{desc}</span>
+                  <span className="text-xs text-zinc-600" id={`section-${id}-desc`}>{desc}</span>
                 </div>
               </motion.label>
             );
@@ -155,6 +170,8 @@ export default function Home() {
               background: canSubmit ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.08)",
               color: canSubmit ? "black" : "rgba(255,255,255,0.2)",
             }}
+            aria-label="Analyze repository and generate documentation"
+            aria-disabled={!canSubmit}
           >
             <motion.span animate={{ opacity: canSubmit ? 1 : 0.4 }} transition={{ duration: 0.2 }}>
               Analyze repository →

@@ -12,7 +12,7 @@ const GENERATION_CONFIG = {
 
 // Generate documentation using Gemini
 async function generateDocumentation(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash', generationConfig: GENERATION_CONFIG });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite', generationConfig: GENERATION_CONFIG });
   
   const filesContext = files.map(f => `
 File: ${f.path}
@@ -48,7 +48,7 @@ Format the response in clean Markdown with proper headings, code blocks, and lis
 // Generate UML diagram using Gemini
 async function generateUML(files: CodeFile[], repoName: string) {
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-2.5-flash-lite',
     generationConfig: { ...GENERATION_CONFIG, responseMimeType: 'application/json' },
   });
 
@@ -140,7 +140,7 @@ ${filesContext}`;
 
 // Generate quiz using Gemini
 async function generateQuiz(files: CodeFile[], repoName: string) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash', generationConfig: GENERATION_CONFIG });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite', generationConfig: GENERATION_CONFIG });
   
   const filesContext = files.map(f => `
 File: ${f.path}

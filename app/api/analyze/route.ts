@@ -32,10 +32,11 @@ Please provide:
 1. **Project Overview**: What does this project do? What problem does it solve?
 2. **Architecture**: Describe the overall architecture and design patterns used
 3. **Key Components**: List and explain the main components/modules
-4. **Technologies Used**: List the programming languages, frameworks, and libraries
-5. **Setup Instructions**: How to set up and run the project
-6. **API/Functions**: Document key functions, classes, or APIs
-7. **Code Examples**: Show how to use the main features
+4. **File Structure**: Explain the organization of files and directories
+5. **Technologies Used**: List the programming languages, frameworks, and libraries
+6. **Setup Instructions**: How to set up and run the project
+7. **API/Functions**: Document key functions, classes, or APIs
+8. **Code Examples**: Show how to use the main features
 
 Format the response in clean Markdown with proper headings, code blocks, and lists.`;
 
@@ -62,50 +63,67 @@ ${f.content.substring(0, 2000)}${f.content.length > 2000 ? '...' : ''}
 
   const prompt = `You are a software architecture expert. Analyze the code repository "${repoName}".
 
-Return a single JSON object with exactly these four keys:
+Return a single JSON object with exactly these four keys: "architecture", "features", "classDiagram", "codebaseMap".
 
 {
-  "classDiagram": "<valid Mermaid classDiagram string>",
-  "sequenceDiagram": "<valid Mermaid sequenceDiagram string>",
-  "descriptions": {
-    "<NodeOrActorName>": "<one sentence plain-English description>"
+  "architecture": {
+    "mermaid": "<valid Mermaid flowchart TD string>",
+    "nodes": [
+      { "id": "<alphanumericNodeId>", "displayName": "<human-readable label>", "category": "<page|route|external|internal>", "description": "<one sentence>" }
+    ]
   },
-  "categories": {
-    "<NodeOrActorName>": "<page|route|external|internal|actor>"
+  "features": [
+    {
+      "name": "<feature name>",
+      "description": "<one sentence>",
+      "flow": [
+        { "path": "<relative/file/path.ts>", "role": "<10-15 word description of this file's role in the feature>" }
+      ],
+      "sequenceDiagram": "<optional Mermaid sequenceDiagram string — omit key entirely if not needed>"
+    }
+  ],
+  "classDiagram": {
+    "hasClassHierarchy": <true|false>,
+    "mermaid": "<Mermaid classDiagram string or null>",
+    "classes": [
+      { "name": "<ClassName>", "category": "<page|route|external|internal>", "description": "<one sentence>" }
+    ]
+  },
+  "codebaseMap": {
+    "nodes": [
+      { "id": "<relative/file/path.ts>", "label": "<filename only>", "category": "<page|route|external|internal>", "description": "<one sentence>" }
+    ],
+    "edges": [
+      { "source": "<relative/file/path.ts>", "target": "<relative/file/path.ts>", "label": "<optional: import|uses|calls>" }
+    ]
   }
 }
 
-Rules for the CLASS DIAGRAM:
-- Include AT MOST 7 of the most architecturally important classes/modules. Skip utility helpers, config files, and anything not central to the main data flow.
-- Show AT MOST 2-3 members per class — only the most important ones.
-- Show AT MOST 5 relationships total. Prefer composition (-->) over inheritance. Drop trivial or obvious relationships.
-- Do NOT show every file in the repo — be selective. A focused diagram with 5 nodes is better than a cluttered one with 15.
+ARCHITECTURE rules:
+- 5 to 8 nodes representing the major modules (e.g. Frontend, APILayer, GitHubAPI, GeminiAI).
+- Use flowchart TD (top-down). Arrow labels show data flow direction (e.g., "POST /api/analyze", "returns repo files").
+- Node IDs must be plain alphanumeric words (e.g. Frontend, APILayer). The "id" in nodes[] must exactly match the node ID used in the flowchart.
+- Do NOT include markdown fences — just raw Mermaid starting with "flowchart TD".
+- Categories: page=frontend pages/components, route=API routes/server handlers, external=third-party APIs/services, internal=utilities/libraries.
 
-Rules for the SEQUENCE DIAGRAM:
-- Show AT MOST 5 actors. Each actor name must be UNIQUE — never declare the same participant twice.
-- Show only the primary happy-path request flow — skip error handling, retries, and edge cases.
-- Keep it to AT MOST 10 messages total.
+FEATURE FLOWS rules:
+- Identify 3 to 6 of the most important user-facing features or workflows.
+- flow[] lists files in execution order from user action to response/persistence. Include 3 to 7 files per feature using real paths from the repository.
+- sequenceDiagram is OPTIONAL — include only for features with complex multi-system interactions. If included: AT MOST 5 actors, AT MOST 10 messages, bare alphanumeric participant names only (never use the "as" alias form).
+- Do NOT include markdown fences inside sequenceDiagram strings.
 
-Rules for both diagrams:
-- Use valid Mermaid v11 syntax only.
-- In classDiagram: use ONLY the keyword "class", never "interface", "enum", or "abstract class".
-- Actor and class names must be plain alphanumeric — no parentheses, colons, angle brackets, or special characters.
-- Member types must be simple words only (string, number, boolean) — no arrays like string[], no generics, no union types.
-- Do not include markdown fences inside the JSON strings — just the raw diagram text starting with "classDiagram" or "sequenceDiagram".
+CODEBASE MAP rules:
+- Include the 12 to 20 most architecturally significant files as nodes. Use real file paths.
+- "id" is the relative file path (e.g. "app/page.tsx"). "label" is just the filename without directory.
+- Edges represent import/dependency relationships between the listed nodes only.
+- Include 10 to 25 edges covering the key dependency chains. Do NOT list every import — only architecturally meaningful ones.
+- Categories: same values as architecture nodes (page, route, external, internal).
 
-Rules for "descriptions":
-- Must include one entry for every class in the classDiagram and every actor in the sequenceDiagram.
-- ALSO include entries for up to 8 additional important utility functions, helper modules, or key interfaces that appear in the codebase but are not nodes in the diagrams (e.g. parseGitHubUrl, getRepositoryInfo, generateDocumentation). These give onboarding engineers the detail they need.
-- Each description is one plain-English sentence.
-
-Rules for "categories":
-- Must include one entry for every name in "descriptions".
-- Use exactly one of these five values: page, route, external, internal, actor.
-  - page: frontend React pages/components and client-side entry points
-  - route: Next.js API routes and server-side request handlers
-  - external: third-party APIs and services (GitHub, Gemini, Octokit, etc.)
-  - internal: internal utilities, helper modules, and library functions
-  - actor: human users, browsers, or generic client actors in sequence diagrams
+CLASS DIAGRAM rules:
+- Only include a class if it has at least one structural relationship (inheritance <|--, composition -->, aggregation o--) with another class. Do NOT include: React function components, page files, standalone route handlers, or utility modules with only exported functions.
+- If fewer than 3 classes have structural relationships, set hasClassHierarchy: false, mermaid: null, classes: [].
+- If hasClassHierarchy: true, mermaid must start with "classDiagram". Use ONLY the "class" keyword (never "interface", "enum", "abstract class"). Class names must be plain alphanumeric. Member types: simple words only (string, number, boolean — no arrays, generics, or unions).
+- Do NOT include markdown fences in mermaid strings.
 
 Repository Files:
 ${filesContext}`;
@@ -142,6 +160,7 @@ Generate 10 multiple-choice questions covering:
 - Architecture and design patterns
 - Key functions and their behavior
 - Best practices used in the code
+- Potential improvements or issues
 
 Format as JSON array with this structure:
 [

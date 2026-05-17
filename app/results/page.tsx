@@ -355,6 +355,7 @@ function ResultsPageContent() {
   const [activeNode, setActiveNode] = useState<string | null>(null);
   const [diagramHeight, setDiagramHeight] = useState<number>(500);
   const [readingProgress, setReadingProgress] = useState<number>(0);
+  const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
 
   const loading = !data && !error;
   const step = useLoadingSteps(loading);
@@ -575,20 +576,29 @@ function ResultsPageContent() {
               <motion.div key="docs" variants={fadeUp} initial="hidden" animate="show" exit="exit" className="flex gap-8">
                 {/* TOC Sidebar */}
                 {headings.length > 0 && (
-                  <aside className="hidden lg:block w-64 shrink-0">
+                  <aside className="hidden lg:block w-56 shrink-0">
                     <nav className="sticky top-20">
-                      <p className="text-xs font-semibold text-zinc-600 mb-3 uppercase tracking-wider">Contents</p>
-                      <ul className="space-y-2">
-                        {headings.map(h => (
-                          <li key={h.id}>
-                            <a
-                              href={`#${h.id}`}
-                              className="text-xs text-zinc-500 hover:text-white transition-colors block py-1"
-                            >
-                              {h.text}
-                            </a>
-                          </li>
-                        ))}
+                      <p className="text-[10px] font-semibold text-zinc-600 mb-3 uppercase tracking-widest">Contents</p>
+                      <ul className="space-y-0.5">
+                        {headings.map(h => {
+                          const isActive = activeHeadingId === h.id;
+                          return (
+                            <li key={h.id}>
+                              <a
+                                href={`#${h.id}`}
+                                onClick={() => setActiveHeadingId(h.id)}
+                                className="flex items-center gap-2.5 py-1.5 pr-2 text-xs transition-all duration-150 rounded"
+                                style={{ color: isActive ? 'rgba(255,255,255,0.9)' : 'rgb(113,113,122)' }}
+                              >
+                                <span
+                                  className="shrink-0 w-0.5 h-4 rounded-full transition-all duration-150"
+                                  style={{ backgroundColor: isActive ? 'rgba(255,255,255,0.5)' : 'transparent' }}
+                                />
+                                <span className={isActive ? 'font-medium' : ''}>{h.text}</span>
+                              </a>
+                            </li>
+                          );
+                        })}
                       </ul>
                     </nav>
                   </aside>
@@ -600,6 +610,7 @@ function ResultsPageContent() {
                   <DocumentationContent
                     html={processedDocs.html}
                     mermaidBlocks={processedDocs.mermaidBlocks}
+                    onActiveHeadingChange={setActiveHeadingId}
                   />
                 </section>
               </motion.div>

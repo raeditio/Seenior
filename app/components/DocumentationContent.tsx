@@ -16,30 +16,29 @@ export default function DocumentationContent({ html, mermaidBlocks, onActiveHead
   const [searchResults, setSearchResults] = useState<number>(0);
   const [currentMatch, setCurrentMatch] = useState(0);
 
-  // Scroll spy: highlight the TOC item for whichever h2 is near the top of the viewport
+  // Scroll spy: find the last heading whose top edge is above the fold (accounting for sticky header).
+  // This reliably highlights whichever section the reader is currently in, even between headings.
   useEffect(() => {
-    const container = contentRef.current;
-    if (!container || !onActiveHeadingChange) return;
+    if (!onActiveHeadingChange) return;
 
-    const headings = Array.from(container.querySelectorAll('h2[id]'));
-    if (!headings.length) return;
+    const OFFSET = 140; // px from top of viewport — clears sticky header + toolbar
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // Pick the first intersecting heading (topmost visible)
-        const visible = entries
-          .filter(e => e.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (visible.length > 0) {
-          onActiveHeadingChange(visible[0].target.id);
+    const update = () => {
+      const headings = Array.from(document.querySelectorAll('h2[id]')) as HTMLElement[];
+      if (!headings.length) return;
+
+      let activeId: string | null = headings[0].id; // default to first section
+      for (const h of headings) {
+        if (h.getBoundingClientRect().top <= OFFSET) {
+          activeId = h.id;
         }
-      },
-      // Trigger when heading crosses the top 30% of the viewport
-      { rootMargin: '0px 0px -65% 0px', threshold: 0 }
-    );
+      }
+      onActiveHeadingChange(activeId);
+    };
 
-    headings.forEach(h => observer.observe(h));
-    return () => observer.disconnect();
+    window.addEventListener('scroll', update, { passive: true });
+    update(); // run immediately so first section is highlighted on load
+    return () => window.removeEventListener('scroll', update);
   }, [html, onActiveHeadingChange]);
 
   // Search: highlight matches and jump to first result
